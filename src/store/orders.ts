@@ -55,11 +55,11 @@ export function useOrders() {
   const [orders, setOrders] = useState<Order[]>([]);
 
   useEffect(() => {
-  const refresh = () => setOrders(readOrders());
-  refresh();
-  const id = setInterval(refresh, 1000);
-  return () => clearInterval(id);
-}, []);
+    const refresh = () => setOrders(readOrders());
+    refresh();
+    const id = setInterval(refresh, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const sorted = useMemo(() => {
     return [...orders].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -70,27 +70,35 @@ export function useOrders() {
     writeOrders(next);
   }
 
+  /**
+   * ✅ Si tu passes { id, createdAt } depuis Payment,
+   * l'admin/cuisine aura EXACTEMENT le même code commande que le ticket client.
+   */
   function addOrder(input: {
+    id?: string;
+    createdAt?: string;
     draft: OrderDraft;
     items: CartItem[];
     paymentMethod: PaymentMethod;
+    status?: OrderStatus;
+    paymentPaid?: boolean;
   }): string {
     const subtotalCents = input.items.reduce(
-      (sum, it) =>
-        sum + (it.basePriceCents + it.optionPriceCents) * it.quantity,
+      (sum, it) => sum + (it.basePriceCents + it.optionPriceCents) * it.quantity,
       0
     );
+
     const deliveryFeeCents =
       input.draft.mode === "delivery" ? input.draft.deliveryFeeCents ?? 250 : 0;
 
     const totalCents = subtotalCents + deliveryFeeCents;
 
     const order: Order = {
-      id: uid(),
-      createdAt: new Date().toISOString(),
-      status: "new",
+      id: input.id ?? uid(),
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      status: input.status ?? "new",
       paymentMethod: input.paymentMethod,
-      paymentPaid: false,
+      paymentPaid: input.paymentPaid ?? false,
       draft: input.draft,
       items: input.items,
       subtotalCents,

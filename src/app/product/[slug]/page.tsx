@@ -447,6 +447,7 @@ export default function ProductBuilderPage() {
   safeWrite(LINES_KEY, []);
 
   // ✅ on va au panier, pas au ticket
+  console.log("REDIRECT TO /cart");
   router.push("/cart");
 }
 

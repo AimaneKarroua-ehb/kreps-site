@@ -19,14 +19,18 @@ export type Order = {
 
 const LAST_ORDER_KEY = "kreps_last_order_v1";
 
-function makeId() {
+export function makeOrderId() {
   const part = Math.random().toString(16).slice(2, 8).toUpperCase();
   return `KR-${part}`;
 }
 
-export function buildOrder(lines: OrderLine[], totalCents: number): Order {
+export function buildOrder(
+  lines: OrderLine[],
+  totalCents: number,
+  id: string = makeOrderId()
+): Order {
   return {
-    id: makeId(),
+    id,
     createdAt: new Date().toISOString(),
     lines,
     totalCents,

@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCart } from "@/store/cart";
 import { useOrders } from "@/store/orders"; // si alias bug: "../../../store/orders"
-import { formatEUR } from "@/lib/money";
 import { buildOrder, saveLastOrder } from "@/lib/order";
+import { formatEUR } from "@/lib/money";
+import type { PaymentMethod } from "@/store/orders";
 
-type Method = "terminal" | "cash" | "payconiq";
+type Method = PaymentMethod | "terminal" | "cash" | "payconiq";
 
 type Draft = {
   fullName: string;
@@ -29,21 +30,23 @@ export default function PaymentPage() {
 
   const [method, setMethod] = useState<Method>("terminal");
   const [ready, setReady] = useState(false);
+  const [draft, setDraft] = useState<Draft | null>(null);
 
-  // 1) Charger le draft (infos checkout)
-  const draft = useMemo<Draft | null>(() => {
+  // Charger le draft UNIQUEMENT côté client (sinon ça peut être null au 1er rendu)
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
-      return raw ? (JSON.parse(raw) as Draft) : null;
+      setDraft(raw ? (JSON.parse(raw) as Draft) : null);
     } catch {
-      return null;
+      setDraft(null);
+    } finally {
+      setReady(true);
     }
   }, []);
 
-  // 2) Si pas de draft ou panier vide => redirige vers checkout/menu
+  // Redirects de sécurité
   useEffect(() => {
-    // attend une frame pour éviter un flash
-    setReady(true);
+    if (!ready) return;
 
     if (!draft) {
       router.replace("/checkout");
@@ -52,65 +55,56 @@ export default function PaymentPage() {
 
     if (!cart.items || cart.items.length === 0) {
       router.replace("/");
-      return;
     }
-  }, [draft, cart.items, router]);
+  }, [ready, draft, cart.items, router]);
 
-  // Totaux
   const subtotalCents = useMemo(() => {
     return cart.items.reduce(
-      (sum, it) => sum + (it.basePriceCents + it.optionPriceCents) * it.quantity,
-      0
+      (sum, it) =>
+        sum + (it.basePriceCents + it.optionPriceCents) * it.quantity,
+      0,
     );
   }, [cart.items]);
 
   const deliveryFeeCents =
-    draft?.mode === "delivery" ? draft?.deliveryFeeCents ?? 250 : 0;
+    draft?.mode === "delivery" ? (draft?.deliveryFeeCents ?? 250) : 0;
 
   const totalCents = subtotalCents + deliveryFeeCents;
 
-  const canConfirm = !!draft && cart.items.length > 0;
+  const canConfirm = ready && !!draft && cart.items.length > 0;
 
   function confirmOrder() {
-  if (!draft) return;
-  if (cart.items.length === 0) return;
+    if (!draft) return;
+    if (cart.items.length === 0) return;
 
-  // 1) Création dans ton store orders (interne)
-  const orderId = orders.addOrder({
-    draft: {
-      ...draft,
-      deliveryFeeCents,
+    // ✅ 1) créer l’ordre UNE fois (ID unique)
+    const order = buildOrder(
+      cart.items.map((it) => ({
+        productId: it.productId,
+        name: it.name,
+        basePriceCents: it.basePriceCents,
+        optionPriceCents: it.optionPriceCents,
+        quantity: it.quantity,
+        selectedOptions: it.selectedOptions,
+      })),
       totalCents,
-    },
-    items: cart.items,
-    paymentMethod: method,
-  });
+    );
 
-  // 2) ✅ Preuve de commande (ticket client) — seulement ici, après paiement
-  const order = buildOrder(
-    cart.items.map((it) => ({
-      productId: it.productId,
-      name: it.name,
-      basePriceCents: it.basePriceCents,
-      optionPriceCents: it.optionPriceCents,
-      quantity: it.quantity,
-      selectedOptions: it.selectedOptions,
-    })),
-    totalCents
-  );
+    // ✅ 2) Sauver preuve client (même ID)
+    saveLastOrder(order);
 
-  saveLastOrder(order);
+    // ✅ 3) Envoyer le MÊME ID à l’admin/cuisine
+    orders.addOrder({
+      id: order.id,
+      createdAt: order.createdAt,
+      draft: { ...draft, deliveryFeeCents, totalCents },
+      items: cart.items,
+      paymentMethod: method,
+    });
 
-  // (optionnel) garder aussi l’id simple si tu veux
-  localStorage.setItem("kreps_last_order_id_v1", order.id);
-
-  // 3) Nettoyage
-  cart.clear();
-  // localStorage.removeItem(DRAFT_KEY);
-
-  // 4) Page succès
-  router.push("/success");
-}
+    // ✅ 4) Naviguer success (pas de flash)
+    router.push("/success");
+  }
 
   if (!ready) {
     return (
@@ -172,7 +166,9 @@ export default function PaymentPage() {
 
           <div className="mt-3 flex items-center justify-between text-white">
             <span>Total</span>
-            <span className="font-semibold text-yellow-300">{formatEUR(totalCents)}</span>
+            <span className="font-semibold text-yellow-300">
+              {formatEUR(totalCents)}
+            </span>
           </div>
 
           <button

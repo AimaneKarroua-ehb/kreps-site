@@ -1,86 +1,101 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCart } from "@/store/cart";
 import { formatEUR } from "@/lib/money";
 
-type OrderMode = "pickup" | "delivery";
-
-type CheckoutForm = {
+type Draft = {
   fullName: string;
   phone: string;
-  mode: OrderMode;
-  address: {
-    street: string;
-    postalCode: string;
-    city: string;
-  };
-  note: string;
-  remember: boolean;
+  mode: "pickup" | "delivery";
+  address?: { street: string; postalCode: string; city: string };
+  note?: string;
+  remember?: boolean;
+  deliveryFeeCents?: number;
 };
 
-const KEY = "kreps_checkout_v1";
-
-function loadSaved(): Partial<CheckoutForm> | null {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function saveLocal(data: CheckoutForm) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(data));
-  } catch {}
-}
+const DRAFT_KEY = "kreps_order_draft_v1";
 
 export default function CheckoutPage() {
   const router = useRouter();
   const cart = useCart();
 
-  const saved = useMemo(() => loadSaved(), []);
-  const [form, setForm] = useState<CheckoutForm>({
-    fullName: saved?.fullName ?? "",
-    phone: saved?.phone ?? "",
-    mode: (saved?.mode as OrderMode) ?? "pickup",
-    address: {
-      street: saved?.address?.street ?? "",
-      postalCode: saved?.address?.postalCode ?? "",
-      city: saved?.address?.city ?? "",
-    },
-    note: saved?.note ?? "",
-    remember: saved?.remember ?? true,
-  });
+  // redirect si panier vide
+  useEffect(() => {
+    if (!cart.items || cart.items.length === 0) router.replace("/");
+  }, [cart.items, router]);
 
-  const deliveryFeeCents = form.mode === "delivery" ? 250 : 0; // ajuste si tu veux
-  const totalCents = cart.totalCents + deliveryFeeCents;
+  // charger un draft existant (si l'utilisateur revient)
+  const saved = useMemo<Draft | null>(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      return raw ? (JSON.parse(raw) as Draft) : null;
+    } catch {
+      return null;
+    }
+  }, []);
 
-  const canContinue =
-    cart.items.length > 0 &&
-    form.fullName.trim().length >= 2 &&
-    form.phone.trim().length >= 6 &&
-    (form.mode === "pickup" ||
-      (form.address.street.trim() &&
-        form.address.postalCode.trim() &&
-        form.address.city.trim()));
+  const [mode, setMode] = useState<Draft["mode"]>(saved?.mode ?? "pickup");
+  const [fullName, setFullName] = useState(saved?.fullName ?? "");
+  const [phone, setPhone] = useState(saved?.phone ?? "");
+  const [street, setStreet] = useState(saved?.address?.street ?? "");
+  const [postalCode, setPostalCode] = useState(saved?.address?.postalCode ?? "");
+  const [city, setCity] = useState(saved?.address?.city ?? "");
+  const [note, setNote] = useState(saved?.note ?? "");
+  const [remember, setRemember] = useState(!!saved?.remember);
 
-  function update<K extends keyof CheckoutForm>(key: K, value: CheckoutForm[K]) {
-    const next = { ...form, [key]: value };
-    setForm(next);
-    if (next.remember) saveLocal(next);
-  }
+  // frais livraison par défaut (tu peux changer)
+  const deliveryFeeCents = mode === "delivery" ? 250 : 0;
 
-  function updateAddress<K extends keyof CheckoutForm["address"]>(
-    key: K,
-    value: CheckoutForm["address"][K]
-  ) {
-    const next = { ...form, address: { ...form.address, [key]: value } };
-    setForm(next);
-    if (next.remember) saveLocal(next);
+  const subtotalCents = useMemo(() => {
+    return cart.items.reduce(
+      (sum, it) => sum + (it.basePriceCents + it.optionPriceCents) * it.quantity,
+      0
+    );
+  }, [cart.items]);
+
+  const totalCents = subtotalCents + deliveryFeeCents;
+
+  const canContinue = useMemo(() => {
+    if (cart.items.length === 0) return false;
+    if (fullName.trim().length < 2) return false;
+    if (phone.trim().length < 6) return false;
+    if (mode === "delivery") {
+      if (street.trim().length < 4) return false;
+      if (postalCode.trim().length < 3) return false;
+      if (city.trim().length < 2) return false;
+    }
+    return true;
+  }, [cart.items.length, city, fullName, mode, phone, postalCode, street]);
+
+  function goToPayment() {
+    if (!canContinue) return;
+
+    const draft: Draft = {
+      fullName: fullName.trim(),
+      phone: phone.trim(),
+      mode,
+      note: note.trim() || undefined,
+      remember,
+      deliveryFeeCents,
+      ...(mode === "delivery"
+        ? {
+            address: {
+              street: street.trim(),
+              postalCode: postalCode.trim(),
+              city: city.trim(),
+            },
+          }
+        : {}),
+    };
+
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {}
+
+    console.log("REDIRECT TO /payment");
+    router.push("/payment");
   }
 
   return (
@@ -91,152 +106,120 @@ export default function CheckoutPage() {
         </button>
 
         <h1 className="mt-3 text-3xl font-extrabold text-white">Finaliser</h1>
-        <p className="mt-1 text-white/60 text-sm">
-          Infos rapides pour préparer ta commande.
-        </p>
+        <p className="mt-1 text-white/60 text-sm">Tes infos + retrait/livraison.</p>
 
-        {/* MODE */}
-        <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div className="text-white font-semibold">Mode</div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => update("mode", "pickup")}
-              className={[
-                "rounded-xl border px-3 py-3",
-                form.mode === "pickup"
-                  ? "border-violet-400 bg-violet-500/15 text-white"
-                  : "border-white/10 bg-black/30 text-white/80",
-              ].join(" ")}
-            >
-              À emporter
-            </button>
-            <button
-              type="button"
-              onClick={() => update("mode", "delivery")}
-              className={[
-                "rounded-xl border px-3 py-3",
-                form.mode === "delivery"
-                  ? "border-violet-400 bg-violet-500/15 text-white"
-                  : "border-white/10 bg-black/30 text-white/80",
-              ].join(" ")}
-            >
-              Livraison
-            </button>
-          </div>
+        {/* Mode */}
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("pickup")}
+            className={[
+              "rounded-2xl border p-4 text-left transition",
+              mode === "pickup"
+                ? "border-violet-400 bg-violet-500/15"
+                : "border-white/10 bg-white/5 hover:bg-white/10",
+            ].join(" ")}
+          >
+            <div className="text-white font-semibold">Retrait</div>
+            <div className="mt-1 text-white/60 text-sm">À récupérer sur place.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMode("delivery")}
+            className={[
+              "rounded-2xl border p-4 text-left transition",
+              mode === "delivery"
+                ? "border-violet-400 bg-violet-500/15"
+                : "border-white/10 bg-white/5 hover:bg-white/10",
+            ].join(" ")}
+          >
+            <div className="text-white font-semibold">Livraison</div>
+            <div className="mt-1 text-white/60 text-sm">À ton adresse.</div>
+          </button>
         </div>
 
-        {/* INFOS */}
-        <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div className="text-white font-semibold">Tes infos</div>
+        {/* Infos */}
+        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="text-white font-semibold">Informations</div>
 
-          <label className="mt-3 block">
-            <span className="text-white/70 text-sm">Nom</span>
+          <div className="mt-3 grid gap-2">
             <input
-              value={form.fullName}
-              onChange={(e) => update("fullName", e.target.value)}
-              className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-white outline-none"
-              placeholder="Ex: Aiman"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Nom & prénom"
+              className="kreps-input"
             />
-          </label>
-
-          <label className="mt-3 block">
-            <span className="text-white/70 text-sm">Téléphone</span>
             <input
-              value={form.phone}
-              onChange={(e) => update("phone", e.target.value)}
-              className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-white outline-none"
-              placeholder="Ex: 04xx xx xx xx"
-              inputMode="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="Téléphone"
+              className="kreps-input"
             />
-          </label>
+          </div>
 
-          {form.mode === "delivery" && (
-            <div className="mt-4">
-              <div className="text-white font-semibold">Adresse</div>
-
-              <label className="mt-3 block">
-                <span className="text-white/70 text-sm">Rue + numéro</span>
+          {mode === "delivery" && (
+            <div className="mt-3 grid gap-2">
+              <input
+                value={street}
+                onChange={(e) => setStreet(e.target.value)}
+                placeholder="Rue + numéro"
+                className="kreps-input"
+              />
+              <div className="grid grid-cols-2 gap-2">
                 <input
-                  value={form.address.street}
-                  onChange={(e) => updateAddress("street", e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-white outline-none"
-                  placeholder="Ex: Rue de Bruxelles 12"
+                  value={postalCode}
+                  onChange={(e) => setPostalCode(e.target.value)}
+                  placeholder="Code postal"
+                  className="kreps-input"
                 />
-              </label>
-
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="text-white/70 text-sm">Code postal</span>
-                  <input
-                    value={form.address.postalCode}
-                    onChange={(e) => updateAddress("postalCode", e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-white outline-none"
-                    placeholder="1000"
-                    inputMode="numeric"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="text-white/70 text-sm">Ville</span>
-                  <input
-                    value={form.address.city}
-                    onChange={(e) => updateAddress("city", e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-white outline-none"
-                    placeholder="Bruxelles"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-3 text-white/60 text-sm">
-                Frais livraison :{" "}
-                <span className="text-yellow-300 font-semibold">
-                  {formatEUR(deliveryFeeCents)}
-                </span>
+                <input
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="Ville"
+                  className="kreps-input"
+                />
               </div>
             </div>
           )}
 
-          <label className="mt-4 block">
-            <span className="text-white/70 text-sm">Note (optionnel)</span>
-            <input
-              value={form.note}
-              onChange={(e) => update("note", e.target.value)}
-              className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-white outline-none"
-              placeholder="Ex: sans oignons, sonner 2x..."
-            />
-          </label>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Note (optionnel)"
+            className="kreps-input mt-3 min-h-[96px]"
+          />
 
-          <label className="mt-4 flex items-center gap-2 text-white/70 text-sm">
+          <label className="mt-3 flex items-center gap-2 text-sm text-white/70">
             <input
               type="checkbox"
-              checked={form.remember}
-              onChange={(e) => {
-                const next = { ...form, remember: e.target.checked };
-                setForm(next);
-                if (e.target.checked) saveLocal(next);
-                else localStorage.removeItem(KEY);
-              }}
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
             />
-            Se souvenir de mes infos sur cet appareil
+            Se souvenir de mes infos
           </label>
         </div>
 
-        {/* TOTAL + CTA */}
+        {/* Résumé */}
         <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div className="flex items-center justify-between text-white">
+          <div className="text-white font-semibold">Résumé</div>
+          <div className="mt-3 flex items-center justify-between text-white/80">
+            <span>Sous-total</span>
+            <span>{formatEUR(subtotalCents)}</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-white/80">
+            <span>Livraison</span>
+            <span>{formatEUR(deliveryFeeCents)}</span>
+          </div>
+          <div className="mt-3 h-px w-full bg-white/10" />
+          <div className="mt-3 flex items-center justify-between text-white">
             <span>Total</span>
             <span className="font-semibold text-yellow-300">{formatEUR(totalCents)}</span>
           </div>
 
           <button
             disabled={!canContinue}
-            onClick={() => {
-              // On stocke le checkout en local pour l'étape paiement
-              const payload = { ...form, deliveryFeeCents, totalCents };
-              localStorage.setItem("kreps_order_draft_v1", JSON.stringify(payload));
-              router.push("/payment");
-            }}
+            onClick={goToPayment}
             className={[
               "mt-4 w-full rounded-2xl py-4 font-semibold",
               canContinue
@@ -244,12 +227,12 @@ export default function CheckoutPage() {
                 : "bg-white/10 text-white/40 cursor-not-allowed",
             ].join(" ")}
           >
-            Continuer vers le paiement
+            Continuer vers paiement
           </button>
 
-          {cart.items.length === 0 && (
-            <div className="mt-3 text-sm text-red-300">
-              Ton panier est vide. Ajoute un produit d’abord.
+          {!canContinue && (
+            <div className="mt-2 text-xs text-white/50">
+              Remplis nom + téléphone{mode === "delivery" ? " + adresse" : ""}.
             </div>
           )}
         </div>
