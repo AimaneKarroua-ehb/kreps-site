@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCart } from "@/store/cart";
 import { useOrders } from "@/store/orders"; // si alias bug: "../../../store/orders"
-import { buildOrder, saveLastOrder } from "@/lib/order";
+import { buildOrder, saveLastOrder, addOrderToHistory } from "@/lib/order";
 import { formatEUR } from "@/lib/money";
 import type { PaymentMethod } from "@/store/orders";
 
@@ -73,12 +73,12 @@ export default function PaymentPage() {
 
   const canConfirm = ready && !!draft && cart.items.length > 0;
 
-  function confirmOrder() {
+  async function confirmOrder() {
     if (!draft) return;
     if (cart.items.length === 0) return;
 
-    // ✅ 1) créer l’ordre UNE fois (ID unique)
-    const order = buildOrder(
+    // ✅ 1) créer l’ordre local (preuve client)
+    const localOrder = buildOrder(
       cart.items.map((it) => ({
         productId: it.productId,
         name: it.name,
@@ -90,20 +90,64 @@ export default function PaymentPage() {
       totalCents,
     );
 
-    // ✅ 2) Sauver preuve client (même ID)
-    saveLastOrder(order);
+    // ✅ 2) Sauver preuve client (local)
+    saveLastOrder(localOrder);
+    addOrderToHistory(localOrder);
 
-    // ✅ 3) Envoyer le MÊME ID à l’admin/cuisine
-    orders.addOrder({
-      id: order.id,
-      createdAt: order.createdAt,
-      draft: { ...draft, deliveryFeeCents, totalCents },
-      items: cart.items,
-      paymentMethod: method,
+    // ✅ 3) Envoyer au serveur/Supabase
+    const payload = {
+      totalCents,
+      customerName: draft?.fullName ?? null,
+      customerPhone: draft?.phone ?? null,
+      note: draft?.note ?? null,
+      items: cart.items.map((it) => ({
+        productId: it.productId,
+        name: it.name,
+        unitPriceCents: it.basePriceCents + it.optionPriceCents,
+        quantity: it.quantity,
+        selectedOptions: it.selectedOptions ?? {},
+      })),
+    };
+
+    const res = await fetch("/api/orders/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
-    // ✅ 4) Naviguer success (pas de flash)
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+
+    if (!res.ok) {
+      console.error("ORDER CREATE ERROR:", data);
+
+      if (res.status === 409) {
+        alert(
+          `Rupture de stock : disponible ${data?.available ?? 0}, demandé ${data?.requested ?? 0}.`,
+        );
+        router.replace("/cart");
+        return;
+      }
+
+      alert(`Erreur API (${res.status}) : ${data?.error ?? data?.raw ?? "inconnue"}`);
+      return;
+    }
+
+    // OK
+    saveLastOrder({ ...localOrder, id: data.code });
     router.push("/success");
+
+    // ✅ Nettoyer draft (et si tu veux, vider le panier dans /success)
+    setTimeout(() => {
+      try {
+        localStorage.removeItem("kreps_order_draft_v1");
+      } catch {}
+    }, 0);
   }
 
   if (!ready) {

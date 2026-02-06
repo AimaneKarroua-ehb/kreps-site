@@ -51,3 +51,22 @@ export function readLastOrder(): Order | null {
     return null;
   }
 }
+
+const ORDER_HISTORY_KEY = "kreps_order_history_v1";
+
+export function readOrderHistory(): Order[] {
+  try {
+    const raw = localStorage.getItem(ORDER_HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as Order[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addOrderToHistory(order: Order) {
+  try {
+    const prev = readOrderHistory();
+    const next = [order, ...prev].slice(0, 50); // max 50 commandes
+    localStorage.setItem(ORDER_HISTORY_KEY, JSON.stringify(next));
+  } catch {}
+}

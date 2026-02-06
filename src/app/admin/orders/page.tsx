@@ -1,133 +1,120 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useOrders, type OrderStatus } from "@/store/orders";
-import { formatEUR } from "@/lib/money";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
-const STATUS_LABEL: Record<OrderStatus, string> = {
-  new: "Reçue",
-  preparing: "En préparation",
-  ready: "Prête",
-  done: "Terminée",
-  canceled: "Annulée",
+type OrderRow = {
+  id: string;
+  code: string;
+  status: string;
+  total_cents: number;
+  created_at: string;
 };
 
-export default function AdminOrdersPage() {
-  const router = useRouter();
-  const { orders, updateStatus, togglePaid, removeOrder } = useOrders();
-  const [filter, setFilter] = useState<OrderStatus | "all">("all");
+function formatEUR(cents: number) {
+  const v = cents / 100;
+  return v.toLocaleString("fr-BE", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: v % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}
 
-  const list = useMemo(() => {
-    if (filter === "all") return orders;
-    return orders.filter((o) => o.status === filter);
-  }, [orders, filter]);
+export default function AdminOrdersPage() {
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true);
+    const res = await fetch("/api/admin/orders");
+    const data = await res.json();
+    setOrders(data ?? []);
+    setLoading(false);
+  }
+
+  async function setStatus(id: string, status: string) {
+    await fetch(`/api/admin/orders/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    load();
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
 
   return (
-    <main className="min-h-screen bg-black px-4 py-6">
+    <main className="min-h-screen bg-black px-4 py-8">
       <div className="mx-auto max-w-2xl">
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-extrabold text-white">Admin • Commandes</h1>
-          <button
-            onClick={() => router.push("/admin/kitchen")}
-            className="rounded-xl bg-violet-500 px-4 py-2 text-white font-semibold"
-          >
-            Écran cuisine
-          </button>
+        <div className="text-white text-2xl font-extrabold">Admin • Commandes</div>
+        <div className="mt-1 text-white/60 text-sm">
+          Clique sur un statut pour mettre à jour.
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          {(["all", "new", "preparing", "ready", "done", "canceled"] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setFilter(s)}
-              className={[
-                "rounded-xl border px-3 py-2 text-sm",
-                filter === s
-                  ? "border-violet-400 bg-violet-500/15 text-white"
-                  : "border-white/10 bg-white/5 text-white/70",
-              ].join(" ")}
-            >
-              {s === "all" ? "Toutes" : STATUS_LABEL[s]}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-5 grid gap-3">
-          {list.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-white/70">
-              Aucune commande pour l’instant.
-            </div>
-          ) : (
-            list.map((o) => (
-              <div
-                key={o.id}
-                className="rounded-2xl border border-white/10 bg-white/5 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
+        {loading ? (
+          <div className="mt-6 text-white/60">Chargement...</div>
+        ) : orders.length === 0 ? (
+          <div className="mt-6 text-white/60">Aucune commande.</div>
+        ) : (
+          <div className="mt-6 grid gap-3">
+            {orders.map((o) => (
+              <div key={o.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="text-white font-semibold">
-                      #{o.id.slice(-6).toUpperCase()} • {o.draft.fullName}
-                    </div>
-                    <div className="mt-1 text-sm text-white/60">
-                      {new Date(o.createdAt).toLocaleString()} •{" "}
-                      {o.draft.mode === "delivery" ? "Livraison" : "À emporter"} •{" "}
-                      {formatEUR(o.totalCents)}
+                    <div className="text-white font-semibold">{o.code}</div>
+                    <div className="text-xs text-white/50 mt-1">
+                      {new Date(o.created_at).toLocaleString("fr-BE")}
                     </div>
                     <div className="mt-2 text-sm text-white/70">
-                      Statut : <span className="text-white">{STATUS_LABEL[o.status]}</span>
-                      {" • "}
-                      Paiement :{" "}
-                      <span className={o.paymentPaid ? "text-green-300" : "text-yellow-300"}>
-                        {o.paymentPaid ? "Payé" : "Non payé"}
-                      </span>
+                      Statut: <span className="text-white">{o.status}</span>
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => removeOrder(o.id)}
-                    className="text-sm text-red-300"
-                  >
-                    Supprimer
-                  </button>
+                  <div className="text-right">
+                    <div className="text-yellow-300 font-extrabold">
+                      {formatEUR(o.total_cents)}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {(["new", "preparing", "ready", "done", "canceled"] as const).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => updateStatus(o.id, s)}
-                      className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/80 hover:bg-black/40"
-                    >
-                      {STATUS_LABEL[s]}
-                    </button>
-                  ))}
-
+                <div className="mt-3 flex flex-wrap gap-2">
                   <button
-                    onClick={() => togglePaid(o.id)}
-                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/80 hover:bg-black/40"
+                    onClick={() => setStatus(o.id, "pending")}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white hover:bg-black/40"
                   >
-                    {o.paymentPaid ? "Marquer non payé" : "Marquer payé"}
+                    En attente
                   </button>
-                </div>
-
-                <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-3">
-                  <div className="text-xs text-white/60">Détails</div>
-                  <ul className="mt-2 text-sm text-white/80 space-y-1">
-                    {o.items.map((it) => (
-                      <li key={it.id}>
-                        • {it.name} x{it.quantity}
-                      </li>
-                    ))}
-                  </ul>
-                  {o.draft.note && (
-                    <div className="mt-2 text-sm text-white/70">Note: {o.draft.note}</div>
-                  )}
+                  <button
+                    onClick={() => setStatus(o.id, "preparing")}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white hover:bg-black/40"
+                  >
+                    Préparer
+                  </button>
+                  <button
+                    onClick={() => setStatus(o.id, "ready")}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white hover:bg-black/40"
+                  >
+                    Prêt
+                  </button>
+                  <button
+                    onClick={() => setStatus(o.id, "done")}
+                    className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white hover:bg-black/40"
+                  >
+                    Terminé
+                  </button>
+                  <button
+                    onClick={() => setStatus(o.id, "canceled")}
+                    className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200 hover:bg-red-500/15"
+                  >
+                    Annuler
+                  </button>
                 </div>
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </main>
   );
